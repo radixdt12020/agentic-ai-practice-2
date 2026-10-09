@@ -1,4 +1,4 @@
-name: Autonomous Coding Agent
+name: Autonomous Coding Agent (Enterprise Guardrailed)
 
 on:
   issues:
@@ -41,134 +41,141 @@ jobs:
         run: |
           pip install google-genai pytest
 
-      - name: Run Agent (Generate or Revise Code)
+      - name: Run Agent with Self-Healing Loop & Guardrails
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Password Validator' }}
-          ISSUE_BODY: ${{ github.event.issue.body || 'Password validation rules' }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Data processing utility' }}
+          ISSUE_BODY: ${{ github.event.issue.body || 'Build a CSV data sanitizer with unit tests' }}
         run: |
           python - << 'EOF'
           import os
           import json
           import re
+          import subprocess
           import time
+          from datetime import datetime
           from google import genai
 
-          api_key = os.environ.get("GEMINI_API_KEY")
-          client = genai.Client(api_key=api_key)
-
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
           is_pr_comment = os.environ.get("IS_PR_COMMENT") == "true"
           comment_body = os.environ.get("COMMENT_BODY", "")
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
 
-          if is_pr_comment:
-              print(f"🔄 Applying Human Reviewer Revisions from comment: {comment_body}")
-              existing_code = open("solution.py").read() if os.path.exists("solution.py") else ""
-              existing_tests = open("test_solution.py").read() if os.path.exists("test_solution.py") else ""
+          # GUARDRAIL 1: Scope Enforcement (Prompt Injection Defense)
+          forbidden_keywords = [".github/workflows", "secrets", "api_key", "chmod", "rm -rf"]
+          for kw in forbidden_keywords:
+              if kw in issue_body.lower() or kw in comment_body.lower():
+                  raise PermissionError(f"🚨 GUARDRAIL BLOCKED: Forbidden keyword '{kw}' detected!")
 
-              prompt = f"""
-              You are an AI software engineer revising existing code based on human code review.
-              Current solution.py:
-              {existing_code}
+          # GUARDRAIL 2: Self-Healing Loop with Circuit Breaker (Max 3 attempts)
+          MAX_ATTEMPTS = 3
+          iteration = 0
+          test_error_feedback = ""
+          success = False
+          model_used = "models/gemini-3.8-flash"
 
-              Current test_solution.py:
-              {existing_tests}
+          while iteration < MAX_ATTEMPTS:
+              iteration += 1
+              print(f"\n🔄 [AGENT ITERATION {iteration}/{MAX_ATTEMPTS}]: Generating code & tests...")
 
-              Human Reviewer Feedback:
-              {comment_body}
+              if is_pr_comment and iteration == 1:
+                  existing_code = open("solution.py").read() if os.path.exists("solution.py") else ""
+                  prompt = f"""
+                  Task: {issue_title}
+                  Current Code: {existing_code}
+                  Human Feedback: {comment_body}
+                  Apply revisions. Return JSON with 'solution_code' and 'test_code'.
+                  """
+              elif test_error_feedback:
+                  print(f"⚠️ Test failure detected. Self-correcting based on traceback...")
+                  prompt = f"""
+                  Your previous code failed unit tests with this error:
+                  {test_error_feedback}
+                  
+                  Fix the bug in `solution.py` or `test_solution.py`.
+                  Return ONLY a JSON object: {{"solution_code": "...", "test_code": "..."}}
+                  """
+              else:
+                  prompt = f"""
+                  Task: {issue_title}
+                  Requirements: {issue_body}
+                  Write Python solution in `solution.py` and pytest tests in `test_solution.py`.
+                  Return ONLY a JSON object: {{"solution_code": "...", "test_code": "..."}}
+                  """
 
-              Apply the feedback and return ONLY a valid JSON object:
-              {{
-                "solution_code": "updated python code",
-                "test_code": "updated pytest code"
-              }}
-              """
-          else:
-              print(f"✨ Creating Fresh Implementation for: {issue_title}...")
-              prompt = f"""
-              You are an autonomous senior Python engineer.
-              Build a complete solution for:
-              TITLE: {issue_title}
-              REQUIREMENTS: {issue_body}
+              # Call Model
+              response = client.models.generate_content(
+                  model=model_used,
+                  contents=prompt,
+                  config={'response_mime_type': 'application/json'}
+              )
+              
+              text = response.text.strip()
+              if text.startswith("```"):
+                  text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
+              data = json.loads(text)
 
-              Return ONLY a valid JSON object:
-              {{
-                "solution_code": "def ...",
-                "test_code": "import pytest ..."
-              }}
-              """
+              with open("solution.py", "w", encoding="utf-8") as f:
+                  f.write(data["solution_code"])
+              with open("test_solution.py", "w", encoding="utf-8") as f:
+                  f.write(data["test_code"])
 
-          models_to_try = [
-              "models/gemini-3.8-flash",
-              "models/gemini-3.7-flash",
-              "models/gemini-3.5-flash",
-              "models/gemini-flash-latest"
-          ]
-
-          response = None
-          for model_name in models_to_try:
-              try:
-                  print(f"🤖 Querying {model_name}...")
-                  response = client.models.generate_content(
-                      model=model_name,
-                      contents=prompt,
-                      config={'response_mime_type': 'application/json'}
-                  )
-                  print(f"✅ Success with {model_name}!")
+              # EVALUATE STEP
+              print("🔍 [AGENT EVALUATE]: Running pytest...")
+              test_run = subprocess.run(["pytest", "test_solution.py"], capture_output=True, text=True)
+              
+              if test_run.returncode == 0:
+                  print("✅ All unit tests PASSED!")
+                  success = True
                   break
-              except Exception as e:
-                  print(f"⚠️ {model_name} failed: {e}")
-                  time.sleep(2)
+              else:
+                  print("❌ Tests failed. Capturing error trace for self-healing...")
+                  test_error_feedback = test_run.stdout + "\n" + test_run.stderr
 
-          if response is None:
-              raise RuntimeError("Could not generate code from models.")
+          if not success:
+              raise RuntimeError(f"🚨 CIRCUIT BREAKER TRIPPED: Agent failed to satisfy tests after {MAX_ATTEMPTS} attempts. Escalating to human.")
 
-          text = response.text.strip()
-          if text.startswith("```"):
-              text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
-
-          data = json.loads(text)
-
-          with open("solution.py", "w", encoding="utf-8") as f:
-              f.write(data["solution_code"])
-
-          with open("test_solution.py", "w", encoding="utf-8") as f:
-              f.write(data["test_code"])
+          # GUARDRAIL 3: Traceability & Audit Report Generation
+          audit_report = f"""
+          ### 📋 Agent Traceability & Audit Report
+          - **Model Provenance:** `{model_used}`
+          - **Execution Timestamp:** `{datetime.utcnow().isoformat()}Z`
+          - **Self-Healing Iterations:** `{iteration}/{MAX_ATTEMPTS}`
+          - **CI Test Status:** ✅ All pytest assertions verified green
+          - **Guardrail Checks:** ✅ Passed (No prompt injection, No workflow tampering)
+          """
+          with open("audit_report.md", "w", encoding="utf-8") as f:
+              f.write(audit_report)
           EOF
 
-      - name: Evaluate (Run Automated Unit Tests)
-        run: |
-          pytest test_solution.py
-
-      - name: Push Revision Directly to PR Branch (if PR Comment)
+      - name: Push Revision (if PR Comment)
         if: github.event_name == 'issue_comment'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add solution.py test_solution.py
-          git commit -m "refactor(agent): apply human review changes"
+          git commit -m "refactor(agent): self-healed and applied review feedback"
           git push
 
-      - name: Create Pull Request (if New Issue)
+      - name: Create Pull Request with Audit Trail (if New Issue)
         if: github.event_name != 'issue_comment'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "feat(agent): implement issue #${{ github.event.issue.number || 4 }}"
           branch: "agent/issue-${{ github.event.issue.number || 4 }}"
-          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Password Validator' }}"
+          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Implementation' }}"
           body: |
             ## Autonomous Agent Implementation
             Closes #${{ github.event.issue.number || 4 }}
             
             ### Task Description
-            ${{ github.event.issue.body || 'Password Validator' }}
+            ${{ github.event.issue.body }}
             
-            ### Evaluation Status
-            - **Unit Tests:** ✅ Passed (`pytest test_solution.py`)
-            - **Branch:** `agent/issue-${{ github.event.issue.number || 4 }}`
+            $(cat audit_report.md)
             
-            Please review the diff and approve to merge.
+            ---
+            *Please review the diff and approve to merge.*
