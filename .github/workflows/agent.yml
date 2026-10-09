@@ -3,10 +3,17 @@ name: Autonomous Coding Agent
 on:
   issues:
     types: [opened, labeled]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
 jobs:
   auto-solve:
+    # Runs on new issues, manual trigger, OR when a comment starts with /agent on a PR
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.action == 'opened' ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/agent') && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,6 +23,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.issue.pull_request != null && format('agent/issue-{0}', github.event.issue.number) || 'main' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,11 +35,13 @@ jobs:
         run: |
           pip install google-genai pytest
 
-      - name: Run Autonomous Agent Script
+      - name: Run Agent (Generate or Revise Code)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'String helper functions' }}
-          ISSUE_BODY: ${{ github.event.issue.body || 'Create string helper functions with reverse and palindrome methods and unit tests' }}
+          IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
+          COMMENT_BODY: ${{ github.event.comment.body || '' }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Task' }}
+          ISSUE_BODY: ${{ github.event.issue.body || '' }}
           ISSUE_NUMBER: ${{ github.event.issue.number || 1 }}
         run: |
           python - << 'EOF'
@@ -40,37 +51,64 @@ jobs:
           from google import genai
 
           api_key = os.environ.get("GEMINI_API_KEY")
-          if not api_key:
-              raise ValueError("GEMINI_API_KEY is missing from GitHub Secrets!")
-
           client = genai.Client(api_key=api_key)
-          issue_title = os.environ.get("ISSUE_TITLE", "Sample Task")
+
+          is_pr_comment = os.environ.get("IS_PR_COMMENT") == "true"
+          comment_body = os.environ.get("COMMENT_BODY", "")
+          issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
 
-          # Use the exact active model from your account
-          chosen_model = "models/gemini-3.8-flash"
-          print(f"Using model: {chosen_model}")
+          # Check if existing code exists for revision
+          existing_code = ""
+          existing_tests = ""
+          if os.path.exists("solution.py"):
+              with open("solution.py", "r") as f:
+                  existing_code = f.read()
+          if os.path.exists("test_solution.py"):
+              with open("test_solution.py", "r") as f:
+                  existing_tests = f.read()
 
-          prompt = f"""
-          You are an autonomous senior software engineer.
-          A user opened an issue:
-          Title: {issue_title}
-          Description: {issue_body}
+          if is_pr_comment:
+              print("🔄 Applying Human Reviewer Revisions...")
+              prompt = f"""
+              You are an autonomous AI coding agent revising your work based on human code review.
+              
+              Original Task: {issue_title} - {issue_body}
+              Current solution.py:
+              {existing_code}
 
-          Generate two files:
-          1. The solution code in Python (`solution.py`).
-          2. Pytest unit tests in Python (`test_solution.py`).
+              Current test_solution.py:
+              {existing_tests}
 
-          Return ONLY a valid JSON object with this exact structure:
-          {{
-            "solution_code": "def ...",
-            "test_code": "import pytest ...",
-            "pr_summary": "brief summary"
-          }}
-          """
+              Human Reviewer Feedback:
+              {comment_body}
+
+              Apply the requested changes to both the code and unit tests.
+              Return ONLY a valid JSON object:
+              {{
+                "solution_code": "updated code",
+                "test_code": "updated tests",
+                "pr_summary": "Summary of revisions made"
+              }}
+              """
+          else:
+              print("✨ Creating Initial Implementation...")
+              prompt = f"""
+              You are an autonomous senior software engineer.
+              Task Title: {issue_title}
+              Task Description: {issue_body}
+
+              Generate Python solution code and complete pytest unit tests.
+              Return ONLY a valid JSON object:
+              {{
+                "solution_code": "def ...",
+                "test_code": "import pytest ...",
+                "pr_summary": "Summary of solution"
+              }}
+              """
 
           response = client.models.generate_content(
-              model=chosen_model,
+              model="models/gemini-3.8-flash",
               contents=prompt,
               config={'response_mime_type': 'application/json'}
           )
@@ -86,20 +124,17 @@ jobs:
 
           with open("test_solution.py", "w", encoding="utf-8") as f:
               f.write(data["test_code"])
-
-          with open("pr_summary.txt", "w", encoding="utf-8") as f:
-              f.write(data.get("pr_summary", "Autonomous agent implementation"))
           EOF
 
       - name: Evaluate (Run Automated Unit Tests)
         run: |
           pytest test_solution.py
 
-      - name: Create Autonomous Pull Request
+      - name: Commit Revision or Create PR
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat: agent auto-implementation for issue #${{ github.event.issue.number || 1 }}"
+          commit-message: "feat(agent): update implementation based on review feedback"
           branch: "agent/issue-${{ github.event.issue.number || 1 }}"
           title: "🤖 Agent PR: ${{ github.event.issue.title || 'Auto Implementation' }}"
           body: |
