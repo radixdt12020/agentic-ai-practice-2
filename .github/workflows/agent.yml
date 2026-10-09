@@ -46,8 +46,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Data processing utility' }}
-          ISSUE_BODY: ${{ github.event.issue.body || 'Build a CSV data sanitizer with unit tests' }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Date Calculator' }}
+          ISSUE_BODY: ${{ github.event.issue.body || 'Build a date difference and leap year validator' }}
         run: |
           python - << 'EOF'
           import os
@@ -70,12 +70,38 @@ jobs:
               if kw in issue_body.lower() or kw in comment_body.lower():
                   raise PermissionError(f"🚨 GUARDRAIL BLOCKED: Forbidden keyword '{kw}' detected!")
 
+          # Helper function with automatic model fallback for 503s
+          def call_llm_with_fallback(prompt_text):
+              models = [
+                  "models/gemini-3.8-flash",
+                  "models/gemini-3.7-flash",
+                  "models/gemini-3.5-flash",
+                  "models/gemini-flash-latest"
+              ]
+              last_err = None
+              for m in models:
+                  for attempt in range(2):
+                      try:
+                          print(f"🤖 Querying {m} (Attempt {attempt+1})...")
+                          res = client.models.generate_content(
+                              model=m,
+                              contents=prompt_text,
+                              config={'response_mime_type': 'application/json'}
+                          )
+                          print(f"✅ Success with {m}!")
+                          return res, m
+                      except Exception as e:
+                          print(f"⚠️ {m} failed: {e}")
+                          last_err = e
+                          time.sleep(2)
+              raise last_err
+
           # GUARDRAIL 2: Self-Healing Loop with Circuit Breaker (Max 3 attempts)
           MAX_ATTEMPTS = 3
           iteration = 0
           test_error_feedback = ""
           success = False
-          model_used = "models/gemini-3.8-flash"
+          active_model = "unknown"
 
           while iteration < MAX_ATTEMPTS:
               iteration += 1
@@ -106,12 +132,7 @@ jobs:
                   Return ONLY a JSON object: {{"solution_code": "...", "test_code": "..."}}
                   """
 
-              # Call Model
-              response = client.models.generate_content(
-                  model=model_used,
-                  contents=prompt,
-                  config={'response_mime_type': 'application/json'}
-              )
+              response, active_model = call_llm_with_fallback(prompt)
               
               text = response.text.strip()
               if text.startswith("```"):
@@ -136,12 +157,12 @@ jobs:
                   test_error_feedback = test_run.stdout + "\n" + test_run.stderr
 
           if not success:
-              raise RuntimeError(f"🚨 CIRCUIT BREAKER TRIPPED: Agent failed to satisfy tests after {MAX_ATTEMPTS} attempts. Escalating to human.")
+              raise RuntimeError(f"🚨 CIRCUIT BREAKER TRIPPED: Agent failed to satisfy tests after {MAX_ATTEMPTS} attempts.")
 
           # GUARDRAIL 3: Traceability & Audit Report Generation
           audit_report = f"""
           ### 📋 Agent Traceability & Audit Report
-          - **Model Provenance:** `{model_used}`
+          - **Model Provenance:** `{active_model}`
           - **Execution Timestamp:** `{datetime.utcnow().isoformat()}Z`
           - **Self-Healing Iterations:** `{iteration}/{MAX_ATTEMPTS}`
           - **CI Test Status:** ✅ All pytest assertions verified green
