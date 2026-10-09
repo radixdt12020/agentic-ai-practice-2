@@ -1,28 +1,44 @@
-def reverse_string(s: str) -> str:
-    """Return the reversed version of the given string."""
-    if not isinstance(s, str):
-        raise TypeError("Input must be a string")
-    return s[::-1]
+from collections import OrderedDict
+from typing import Any, Optional
 
 
-def is_palindrome(s: str, case_sensitive: bool = False, ignore_whitespace: bool = True) -> bool:
-    """Check if the given string is a palindrome.
+class LRUCache:
+    """A Least Recently Used (LRU) Cache implementation with O(1) operations."""
 
-    Args:
-        s: The string to check.
-        case_sensitive: Whether the comparison should be case-sensitive. Defaults to False.
-        ignore_whitespace: Whether whitespace should be ignored. Defaults to True.
+    def __init__(self, capacity: int):
+        if capacity <= 0:
+            raise ValueError("Capacity must be a positive integer.")
+        self.capacity = capacity
+        self._cache: OrderedDict = OrderedDict()
 
-    Returns:
-        True if the string is a palindrome, False otherwise.
-    """
-    if not isinstance(s, str):
-        raise TypeError("Input must be a string")
+    def get(self, key: Any, default: Optional[Any] = None) -> Any:
+        """Retrieve an item from the cache. Returns default if key is not found."""
+        if key not in self._cache:
+            return default
+        self._cache.move_to_end(key)
+        return self._cache[key]
 
-    processed = s
-    if ignore_whitespace:
-        processed = "".join(processed.split())
-    if not case_sensitive:
-        processed = processed.lower()
+    def put(self, key: Any, value: Any) -> None:
+        """Insert or update an item in the cache, evicting the LRU item if necessary."""
+        if key in self._cache:
+            self._cache.move_to_end(key)
+        self._cache[key] = value
+        if len(self._cache) > self.capacity:
+            self._cache.popitem(last=False)
 
-    return processed == processed[::-1]
+    def remove(self, key: Any) -> bool:
+        """Remove an item from the cache. Returns True if removed, False otherwise."""
+        if key in self._cache:
+            del self._cache[key]
+            return True
+        return False
+
+    def clear(self) -> None:
+        """Clear all items from the cache."""
+        self._cache.clear()
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+    def __contains__(self, key: Any) -> bool:
+        return key in self._cache
