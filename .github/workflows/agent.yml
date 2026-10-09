@@ -48,6 +48,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           ISSUE_TITLE: ${{ github.event.issue.title || 'Date Calculator' }}
           ISSUE_BODY: ${{ github.event.issue.body || 'Build a date difference and leap year validator' }}
+          ISSUE_NUM: ${{ github.event.issue.number || 4 }}
         run: |
           python - << 'EOF'
           import os
@@ -63,18 +64,19 @@ jobs:
           comment_body = os.environ.get("COMMENT_BODY", "")
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
+          issue_num = os.environ.get("ISSUE_NUM", "4")
 
-          # GUARDRAIL 1: Scope Enforcement (Prompt Injection Defense)
+          # GUARDRAIL 1: Prompt Injection Defense
           forbidden_keywords = [".github/workflows", "secrets", "api_key", "chmod", "rm -rf"]
           for kw in forbidden_keywords:
               if kw in issue_body.lower() or kw in comment_body.lower():
                   raise PermissionError(f"🚨 GUARDRAIL BLOCKED: Forbidden keyword '{kw}' detected!")
 
-          # Helper function with automatic model fallback for 503s
+          # Helper function with automatic model fallback for 503 errors
           def call_llm_with_fallback(prompt_text):
               models = [
-                  "models/gemini-3.8-flash",
                   "models/gemini-3.7-flash",
+                  "models/gemini-3.8-flash",
                   "models/gemini-3.5-flash",
                   "models/gemini-flash-latest"
               ]
