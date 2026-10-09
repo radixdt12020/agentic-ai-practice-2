@@ -1,28 +1,28 @@
 import pytest
-from solution import validate_password
+from solution import validate_password, calculate_strength
 
 def test_valid_strong_password():
     result = validate_password("SuperSecure123!")
     assert result["is_valid"] is True
-    assert result["strength"] == "Strong"
+    assert result["strength"] == 100
     assert len(result["errors"]) == 0
 
 def test_valid_medium_password():
     result = validate_password("Pass123!")
     assert result["is_valid"] is True
-    assert result["strength"] == "Medium"
+    assert result["strength"] == 90
     assert len(result["errors"]) == 0
 
 def test_invalid_weak_password():
     result = validate_password("123")
     assert result["is_valid"] is False
-    assert result["strength"] == "Weak"
+    assert result["strength"] == 27
     assert len(result["errors"]) > 0
 
 def test_invalid_medium_password():
     result = validate_password("Abcdefg1")
     assert result["is_valid"] is False
-    assert result["strength"] == "Medium"
+    assert result["strength"] == 77
     assert "Password must contain at least one special character (!@#$%^&*)." in result["errors"]
 
 def test_missing_uppercase():
@@ -59,3 +59,10 @@ def test_common_words_rejection():
     result3 = validate_password("Secret123456!")
     assert result3["is_valid"] is False
     assert "Password must not contain common words like 'password', 'admin', or '123456'." in result3["errors"]
+
+def test_calculate_strength_direct():
+    assert calculate_strength("SuperSecure123!") == 100
+    assert calculate_strength("Pass123!") == 90
+    assert calculate_strength("123") == 27
+    with pytest.raises(TypeError):
+        calculate_strength(12345)  # type: ignore

@@ -1,3 +1,24 @@
+def calculate_strength(password: str) -> int:
+    if not isinstance(password, str):
+        raise TypeError("Password must be a string")
+
+    if not password:
+        return 0
+
+    # Character variety: up to 50 points (12.5 points for each category)
+    has_upper = any(c.isupper() for c in password)
+    has_lower = any(c.islower() for c in password)
+    has_digit = any(c.isdigit() for c in password)
+    has_special = any(c in "!@#$%^&*" for c in password)
+
+    variety_score = sum([has_upper, has_lower, has_digit, has_special]) * 12.5
+
+    # Length score: up to 50 points (5 points per character, max 50)
+    length_score = min(50.0, len(password) * 5.0)
+
+    return int(variety_score + length_score)
+
+
 def validate_password(password: str) -> dict:
     if not isinstance(password, str):
         raise TypeError("Password must be a string")
@@ -27,21 +48,10 @@ def validate_password(password: str) -> dict:
         errors.append("Password must not contain common words like 'password', 'admin', or '123456'.")
 
     is_valid = len(errors) == 0
-    score = sum([has_len, has_upper, has_lower, has_digit, has_special])
-
-    if is_valid:
-        if len(password) >= 12:
-            strength = "Strong"
-        else:
-            strength = "Medium"
-    else:
-        if score >= 3:
-            strength = "Medium"
-        else:
-            strength = "Weak"
+    strength_score = calculate_strength(password)
 
     return {
         "is_valid": is_valid,
-        "strength": strength,
+        "strength": strength_score,
         "errors": errors
     }
