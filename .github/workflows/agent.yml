@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: setup-python@v5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -35,11 +35,16 @@ jobs:
         run: |
           python - << 'EOF'
           import os
+          import json
           from google import genai
 
-          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-          issue_title = os.environ["ISSUE_TITLE"]
-          issue_body = os.environ["ISSUE_BODY"]
+          api_key = os.environ.get("GEMINI_API_KEY")
+          if not api_key:
+              raise ValueError("GEMINI_API_KEY is not set in GitHub Secrets!")
+
+          client = genai.Client(api_key=api_key)
+          issue_title = os.environ.get("ISSUE_TITLE", "Sample Task")
+          issue_body = os.environ.get("ISSUE_BODY", "")
 
           prompt = f"""
           You are an autonomous senior software engineer.
@@ -51,7 +56,7 @@ jobs:
           1. The solution code in Python (`solution.py`).
           2. Pytest unit tests in Python (`test_solution.py`).
 
-          Return ONLY a JSON object with this exact structure:
+          Return ONLY a valid JSON object with this exact structure:
           {{
             "solution_code": "code here",
             "test_code": "test code here",
@@ -65,17 +70,16 @@ jobs:
               config={'response_mime_type': 'application/json'}
           )
 
-          import json
           data = json.loads(response.text)
 
-          with open("solution.py", "w") as f:
+          with open("solution.py", "w", encoding="utf-8") as f:
               f.write(data["solution_code"])
 
-          with open("test_solution.py", "w") as f:
+          with open("test_solution.py", "w", encoding="utf-8") as f:
               f.write(data["test_code"])
 
-          with open("pr_summary.txt", "w") as f:
-              f.write(data["pr_summary"])
+          with open("pr_summary.txt", "w", encoding="utf-8") as f:
+              f.write(data.get("pr_summary", "Autonomous agent implementation"))
           EOF
 
       - name: Evaluate (Run Automated Unit Tests)
