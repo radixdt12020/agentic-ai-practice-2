@@ -7,7 +7,6 @@ on:
 
 jobs:
   auto-solve:
-    if: contains(github.event.issue.labels.*.name, 'agent') || github.event.action == 'opened' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,8 +29,8 @@ jobs:
       - name: Run Autonomous Agent Script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Demo Task' }}
-          ISSUE_BODY: ${{ github.event.issue.body || 'Create string helper functions with palindrome and reverse methods and tests' }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'String helper functions' }}
+          ISSUE_BODY: ${{ github.event.issue.body || 'Create string helper functions with reverse and palindrome methods and unit tests' }}
           ISSUE_NUMBER: ${{ github.event.issue.number || 1 }}
         run: |
           python - << 'EOF'
@@ -65,11 +64,27 @@ jobs:
           }}
           """
 
-          response = client.models.generate_content(
-              model='gemini-3.8-flash',
-              contents=prompt,
-              config={'response_mime_type': 'application/json'}
-          )
+          # Try available models with fallback
+          candidate_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash']
+          response = None
+          last_err = None
+
+          for model_name in candidate_models:
+              try:
+                  print(f"Trying model: {model_name}...")
+                  response = client.models.generate_content(
+                      model=model_name,
+                      contents=prompt,
+                      config={'response_mime_type': 'application/json'}
+                  )
+                  print(f"Success with {model_name}!")
+                  break
+              except Exception as e:
+                  print(f"Model {model_name} failed: {e}")
+                  last_err = e
+
+          if response is None:
+              raise last_err
 
           data = json.loads(response.text)
 
