@@ -12,7 +12,7 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'issues' ||
-      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/agent') && github.event.issue.pull_request != null)
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/agent'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -20,19 +20,17 @@ jobs:
       issues: write
 
     steps:
-      - name: Determine Branch Name
-        id: branch_info
-        run: |
-          if [ "${{ github.event_name }}" = "issue_comment" ]; then
-            # If commenting on a PR, fetch the actual PR branch name
-            BRANCH_NAME="agent/issue-${{ github.event.issue.number }}"
-          else
-            BRANCH_NAME="agent/issue-${{ github.event.issue.number || 4 }}"
-          fi
-          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
-
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR Branch if Commenting
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr checkout ${{ github.event.issue.number }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -67,7 +65,7 @@ jobs:
           issue_body = os.environ.get("ISSUE_BODY", "")
 
           if is_pr_comment:
-              print("🔄 Applying Human Reviewer Revisions to Existing Code...")
+              print(f"🔄 Applying Human Reviewer Revisions from comment: {comment_body}")
               existing_code = open("solution.py").read() if os.path.exists("solution.py") else ""
               existing_tests = open("test_solution.py").read() if os.path.exists("test_solution.py") else ""
 
@@ -79,7 +77,7 @@ jobs:
               Current test_solution.py:
               {existing_tests}
 
-              Reviewer Feedback:
+              Human Reviewer Feedback:
               {comment_body}
 
               Apply the feedback and return ONLY a valid JSON object:
@@ -145,19 +143,32 @@ jobs:
         run: |
           pytest test_solution.py
 
-      - name: Commit Changes to Same Branch / Open PR
+      - name: Push Revision Directly to PR Branch (if PR Comment)
+        if: github.event_name == 'issue_comment'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add solution.py test_solution.py
+          git commit -m "refactor(agent): apply human review changes"
+          git push
+
+      - name: Create Pull Request (if New Issue)
+        if: github.event_name != 'issue_comment'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat(agent): update implementation for ${{ steps.branch_info.outputs.branch }}"
-          branch: "${{ steps.branch_info.outputs.branch }}"
-          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Implementation' }}"
+          commit-message: "feat(agent): implement issue #${{ github.event.issue.number || 4 }}"
+          branch: "agent/issue-${{ github.event.issue.number || 4 }}"
+          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Password Validator' }}"
           body: |
             ## Autonomous Agent Implementation
-            Closes #${{ github.event.issue.number }}
+            Closes #${{ github.event.issue.number || 4 }}
+            
+            ### Task Description
+            ${{ github.event.issue.body || 'Password Validator' }}
             
             ### Evaluation Status
             - **Unit Tests:** ✅ Passed (`pytest test_solution.py`)
-            - **Branch:** `${{ steps.branch_info.outputs.branch }}`
+            - **Branch:** `agent/issue-${{ github.event.issue.number || 4 }}`
             
             Please review the diff and approve to merge.
