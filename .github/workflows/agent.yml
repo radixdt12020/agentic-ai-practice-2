@@ -1,0 +1,100 @@
+name: Autonomous Coding Agent
+
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  auto-solve:
+    if: contains(github.event.issue.labels.*.name, 'agent') || github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install google-genai pytest
+
+      - name: Run Autonomous Agent Script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          python - << 'EOF'
+          import os
+          from google import genai
+
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+          issue_title = os.environ["ISSUE_TITLE"]
+          issue_body = os.environ["ISSUE_BODY"]
+
+          prompt = f"""
+          You are an autonomous senior software engineer.
+          A user opened an issue:
+          Title: {issue_title}
+          Description: {issue_body}
+
+          Generate two files:
+          1. The solution code in Python (`solution.py`).
+          2. Pytest unit tests in Python (`test_solution.py`).
+
+          Return ONLY a JSON object with this exact structure:
+          {{
+            "solution_code": "code here",
+            "test_code": "test code here",
+            "pr_summary": "brief explanation of what you built"
+          }}
+          """
+
+          response = client.models.generate_content(
+              model='gemini-2.5-flash',
+              contents=prompt,
+              config={'response_mime_type': 'application/json'}
+          )
+
+          import json
+          data = json.loads(response.text)
+
+          with open("solution.py", "w") as f:
+              f.write(data["solution_code"])
+
+          with open("test_solution.py", "w") as f:
+              f.write(data["test_code"])
+
+          with open("pr_summary.txt", "w") as f:
+              f.write(data["pr_summary"])
+          EOF
+
+      - name: Evaluate (Run Automated Unit Tests)
+        run: |
+          pytest test_solution.py
+
+      - name: Create Autonomous Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "feat: agent auto-implementation for issue #${{ github.event.issue.number }}"
+          branch: "agent/issue-${{ github.event.issue.number }}"
+          title: "🤖 Agent PR: ${{ github.event.issue.title }}"
+          body: |
+            ## Autonomous Agent Implementation
+            Closes #${{ github.event.issue.number }}
+            
+            ### Evaluation Status
+            - **Unit Tests:** ✅ Passed (`pytest test_solution.py`)
+            - **Branch:** `agent/issue-${{ github.event.issue.number }}`
+            
+            Please review the diff and approve to merge.
