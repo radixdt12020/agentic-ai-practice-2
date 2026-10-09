@@ -2,16 +2,21 @@ name: Autonomous Coding Agent
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened, reopened, labeled]
   issue_comment:
     types: [created]
   workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to solve (e.g. 4)'
+        required: false
+        default: '4'
 
 jobs:
   auto-solve:
     if: |
       github.event_name == 'workflow_dispatch' ||
-      github.event.action == 'opened' ||
+      github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '/agent') && github.event.issue.pull_request != null)
     runs-on: ubuntu-latest
     permissions:
@@ -22,8 +27,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.issue.pull_request != null && format('agent/issue-{0}', github.event.issue.number) || 'main' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,11 +40,12 @@ jobs:
       - name: Run Agent (Generate or Revise Code)
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
           IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Task' }}
-          ISSUE_BODY: ${{ github.event.issue.body || '' }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || 1 }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Create Password Validator and Strength Checker' }}
+          ISSUE_BODY: ${{ github.event.issue.body || 'Create validate_password function checking length, uppercase, lowercase, numbers, and special characters with pytest tests' }}
+          ISSUE_NUM: ${{ github.event.issue.number || github.event.inputs.issue_number || 4 }}
         run: |
           python - << 'EOF'
           import os
@@ -57,56 +61,53 @@ jobs:
           comment_body = os.environ.get("COMMENT_BODY", "")
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
+          issue_num = os.environ.get("ISSUE_NUM", "4")
 
-          existing_code = ""
-          existing_tests = ""
-          if os.path.exists("solution.py"):
-              with open("solution.py", "r", encoding="utf-8") as f:
-                  existing_code = f.read()
-          if os.path.exists("test_solution.py"):
-              with open("test_solution.py", "r", encoding="utf-8") as f:
-                  existing_tests = f.read()
+          print(f"==================================================")
+          print(f"🎯 PROCESSING ISSUE #{issue_num}: {issue_title}")
+          print(f"📝 DESCRIPTION: {issue_body}")
+          print(f"==================================================")
 
           if is_pr_comment:
               print("🔄 Applying Human Reviewer Revisions...")
+              existing_code = open("solution.py").read() if os.path.exists("solution.py") else ""
+              existing_tests = open("test_solution.py").read() if os.path.exists("test_solution.py") else ""
+
               prompt = f"""
-              You are an autonomous AI coding agent revising your work based on human code review.
-              
-              Original Task: {issue_title} - {issue_body}
+              You are an AI software engineer revising existing code based on human review.
               Current solution.py:
               {existing_code}
 
               Current test_solution.py:
               {existing_tests}
 
-              Human Reviewer Feedback:
+              Reviewer Feedback:
               {comment_body}
 
-              Apply the requested changes to both the code and unit tests.
-              Return ONLY a valid JSON object:
+              Return ONLY a JSON object:
               {{
-                "solution_code": "updated code",
-                "test_code": "updated tests",
-                "pr_summary": "Summary of revisions made"
+                "solution_code": "updated python code",
+                "test_code": "updated pytest code"
               }}
               """
           else:
-              print("✨ Creating Initial Implementation...")
+              print("✨ Creating Fresh Solution for this Specific Issue...")
               prompt = f"""
-              You are an autonomous senior software engineer.
-              Task Title: {issue_title}
-              Task Description: {issue_body}
+              You are an autonomous senior Python engineer.
+              Build a complete solution for this specific task:
+              
+              TITLE: {issue_title}
+              REQUIREMENTS: {issue_body}
 
-              Generate Python solution code and complete pytest unit tests.
+              DO NOT generate an LRU Cache. Solve the exact problem specified in the TITLE and REQUIREMENTS above.
+              
               Return ONLY a valid JSON object:
               {{
                 "solution_code": "def ...",
-                "test_code": "import pytest ...",
-                "pr_summary": "Summary of solution"
+                "test_code": "import pytest ..."
               }}
               """
 
-          # Fallback models list in order of preference
           models_to_try = [
               "models/gemini-3.8-flash",
               "models/gemini-3.7-flash",
@@ -115,28 +116,22 @@ jobs:
           ]
 
           response = None
-          last_exception = None
-
           for model_name in models_to_try:
-              for attempt in range(2):
-                  try:
-                      print(f"🤖 Attempting with {model_name} (Attempt {attempt + 1})...")
-                      response = client.models.generate_content(
-                          model=model_name,
-                          contents=prompt,
-                          config={'response_mime_type': 'application/json'}
-                      )
-                      print(f"✅ Success with {model_name}!")
-                      break
-                  except Exception as e:
-                      print(f"⚠️ {model_name} failed: {e}")
-                      last_exception = e
-                      time.sleep(2)
-              if response is not None:
+              try:
+                  print(f"🤖 Querying {model_name}...")
+                  response = client.models.generate_content(
+                      model=model_name,
+                      contents=prompt,
+                      config={'response_mime_type': 'application/json'}
+                  )
+                  print(f"✅ Success with {model_name}!")
                   break
+              except Exception as e:
+                  print(f"⚠️ {model_name} failed: {e}")
+                  time.sleep(2)
 
           if response is None:
-              raise last_exception
+              raise RuntimeError("Could not generate code from models.")
 
           text = response.text.strip()
           if text.startswith("```"):
@@ -155,19 +150,22 @@ jobs:
         run: |
           pytest test_solution.py
 
-      - name: Commit Revision or Create PR
+      - name: Create Autonomous Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat(agent): update implementation based on task/review"
-          branch: "agent/issue-${{ github.event.issue.number || 1 }}"
-          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Auto Implementation' }}"
+          commit-message: "feat(agent): implement issue #${{ github.event.issue.number || github.event.inputs.issue_number || 4 }}"
+          branch: "agent/issue-${{ github.event.issue.number || github.event.inputs.issue_number || 4 }}"
+          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Password Validator and Checker' }}"
           body: |
             ## Autonomous Agent Implementation
-            Closes #${{ github.event.issue.number || 1 }}
+            Closes #${{ github.event.issue.number || github.event.inputs.issue_number || 4 }}
+            
+            ### Task Description
+            ${{ github.event.issue.body || 'Create Password Validator and Strength Checker' }}
             
             ### Evaluation Status
             - **Unit Tests:** ✅ Passed (`pytest test_solution.py`)
-            - **Branch:** `agent/issue-${{ github.event.issue.number || 1 }}`
+            - **Branch:** `agent/issue-${{ github.event.issue.number || github.event.inputs.issue_number || 4 }}`
             
             Please review the diff and approve to merge.
