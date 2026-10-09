@@ -47,13 +47,9 @@ jobs:
           issue_title = os.environ.get("ISSUE_TITLE", "Sample Task")
           issue_body = os.environ.get("ISSUE_BODY", "")
 
-          # Dynamically find the best available model for your API key
-          available_models = [m.name for m in client.models.list()]
-          print(f"Available models for this key: {available_models}")
-
-          # Pick the first available flash model (e.g., gemini-2.0-flash or gemini-1.5-flash)
-          chosen_model = next((m for m in available_models if 'flash' in m), available_models[0])
-          print(f"Selected model: {chosen_model}")
+          # Use the exact active model from your account
+          chosen_model = "models/gemini-3.8-flash"
+          print(f"Using model: {chosen_model}")
 
           prompt = f"""
           You are an autonomous senior software engineer.
@@ -65,7 +61,7 @@ jobs:
           1. The solution code in Python (`solution.py`).
           2. Pytest unit tests in Python (`test_solution.py`).
 
-          Return ONLY a JSON object with this format (no extra text):
+          Return ONLY a valid JSON object with this exact structure:
           {{
             "solution_code": "def ...",
             "test_code": "import pytest ...",
@@ -79,7 +75,6 @@ jobs:
               config={'response_mime_type': 'application/json'}
           )
 
-          # Parse response
           text = response.text.strip()
           if text.startswith("```"):
               text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
