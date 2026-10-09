@@ -9,7 +9,6 @@ on:
 
 jobs:
   auto-solve:
-    # Runs on new issues, manual trigger, OR when a comment starts with /agent on a PR
     if: |
       github.event_name == 'workflow_dispatch' ||
       github.event.action == 'opened' ||
@@ -48,6 +47,7 @@ jobs:
           import os
           import json
           import re
+          import time
           from google import genai
 
           api_key = os.environ.get("GEMINI_API_KEY")
@@ -58,14 +58,13 @@ jobs:
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
 
-          # Check if existing code exists for revision
           existing_code = ""
           existing_tests = ""
           if os.path.exists("solution.py"):
-              with open("solution.py", "r") as f:
+              with open("solution.py", "r", encoding="utf-8") as f:
                   existing_code = f.read()
           if os.path.exists("test_solution.py"):
-              with open("test_solution.py", "r") as f:
+              with open("test_solution.py", "r", encoding="utf-8") as f:
                   existing_tests = f.read()
 
           if is_pr_comment:
@@ -107,11 +106,37 @@ jobs:
               }}
               """
 
-          response = client.models.generate_content(
-              model="models/gemini-3.8-flash",
-              contents=prompt,
-              config={'response_mime_type': 'application/json'}
-          )
+          # Fallback models list in order of preference
+          models_to_try = [
+              "models/gemini-3.8-flash",
+              "models/gemini-3.7-flash",
+              "models/gemini-3.5-flash",
+              "models/gemini-flash-latest"
+          ]
+
+          response = None
+          last_exception = None
+
+          for model_name in models_to_try:
+              for attempt in range(2):
+                  try:
+                      print(f"🤖 Attempting with {model_name} (Attempt {attempt + 1})...")
+                      response = client.models.generate_content(
+                          model=model_name,
+                          contents=prompt,
+                          config={'response_mime_type': 'application/json'}
+                      )
+                      print(f"✅ Success with {model_name}!")
+                      break
+                  except Exception as e:
+                      print(f"⚠️ {model_name} failed: {e}")
+                      last_exception = e
+                      time.sleep(2)
+              if response is not None:
+                  break
+
+          if response is None:
+              raise last_exception
 
           text = response.text.strip()
           if text.startswith("```"):
@@ -134,7 +159,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat(agent): update implementation based on review feedback"
+          commit-message: "feat(agent): update implementation based on task/review"
           branch: "agent/issue-${{ github.event.issue.number || 1 }}"
           title: "🤖 Agent PR: ${{ github.event.issue.title || 'Auto Implementation' }}"
           body: |
