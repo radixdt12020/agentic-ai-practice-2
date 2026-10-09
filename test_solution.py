@@ -20,7 +20,7 @@ def test_invalid_weak_password():
     assert len(result["errors"]) > 0
 
 def test_invalid_medium_password():
-    result = validate_password("Password123")
+    result = validate_password("Abcdefg1")
     assert result["is_valid"] is False
     assert result["strength"] == "Medium"
     assert "Password must contain at least one special character (!@#$%^&*)." in result["errors"]
@@ -43,3 +43,19 @@ def test_missing_digit():
 def test_non_string_input():
     with pytest.raises(TypeError):
         validate_password(12345678)  # type: ignore
+
+def test_common_words_rejection():
+    # Test case-insensitive rejection of "password"
+    result1 = validate_password("MyPaSsWoRd123!")
+    assert result1["is_valid"] is False
+    assert "Password must not contain common words like 'password', 'admin', or '123456'." in result1["errors"]
+
+    # Test case-insensitive rejection of "admin"
+    result2 = validate_password("AdminSecure!9")
+    assert result2["is_valid"] is False
+    assert "Password must not contain common words like 'password', 'admin', or '123456'." in result2["errors"]
+
+    # Test rejection of "123456"
+    result3 = validate_password("Secret123456!")
+    assert result3["is_valid"] is False
+    assert "Password must not contain common words like 'password', 'admin', or '123456'." in result3["errors"]

@@ -21,6 +21,11 @@ def validate_password(password: str) -> dict:
     if not has_special:
         errors.append("Password must contain at least one special character (!@#$%^&*).")
 
+    # Common words check (case-insensitive)
+    common_words = ["password", "admin", "123456"]
+    if any(word in password.lower() for word in common_words):
+        errors.append("Password must not contain common words like 'password', 'admin', or '123456'.")
+
     is_valid = len(errors) == 0
     score = sum([has_len, has_upper, has_lower, has_digit, has_special])
 
