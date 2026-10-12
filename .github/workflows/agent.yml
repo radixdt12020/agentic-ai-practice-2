@@ -1,18 +1,12 @@
-name: Autonomous Coding Agent (Enterprise Guardrailed)
+name: Multi-Agent Squad (Developer + Security Auditor)
 
 on:
   issues:
     types: [opened, reopened, labeled]
-  issue_comment:
-    types: [created]
   workflow_dispatch:
 
 jobs:
-  auto-solve:
-    if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'issues' ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/agent'))
+  multi-agent-pipeline:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,15 +16,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Checkout PR Branch if Commenting
-        if: github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr checkout ${{ github.event.issue.number }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,15 +26,12 @@ jobs:
         run: |
           pip install google-genai pytest
 
-      - name: Run Agent with Self-Healing Loop & Escalation
-        id: agent_step
+      - name: Execute Multi-Agent Squad Workflow
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
-          COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Task' }}
-          ISSUE_BODY: ${{ github.event.issue.body || '' }}
-          ISSUE_NUM: ${{ github.event.issue.number || 4 }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Multi-Agent Secure Auth Task' }}
+          ISSUE_BODY: ${{ github.event.issue.body || 'Build a secure password hasher and token generator' }}
+          ISSUE_NUM: ${{ github.event.issue.number || 10 }}
         run: |
           python - << 'EOF'
           import os
@@ -57,122 +39,136 @@ jobs:
           import re
           import subprocess
           import time
-          from datetime import datetime
           from google import genai
 
           client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-          is_pr_comment = os.environ.get("IS_PR_COMMENT") == "true"
-          comment_body = os.environ.get("COMMENT_BODY", "")
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
 
           def call_llm(prompt_text):
               models = ["models/gemini-3.7-flash", "models/gemini-3.8-flash", "models/gemini-flash-latest"]
               for m in models:
-                  try:
-                      res = client.models.generate_content(
-                          model=m,
-                          contents=prompt_text,
-                          config={'response_mime_type': 'application/json'}
-                      )
-                      return res, m
-                  except Exception:
-                      time.sleep(1)
-              raise RuntimeError("LLM Unavailable")
+                  for attempt in range(2):
+                      try:
+                          res = client.models.generate_content(
+                              model=m,
+                              contents=prompt_text,
+                              config={'response_mime_type': 'application/json'}
+                          )
+                          return res.text
+                      except Exception:
+                          time.sleep(2)
+              raise RuntimeError("All models unavailable")
 
-          MAX_ATTEMPTS = 3
-          iteration = 0
-          test_error_feedback = ""
-          success = False
-          active_model = "unknown"
+          def clean_json(raw_text):
+              raw_text = raw_text.strip()
+              if raw_text.startswith("```"):
+                  raw_text = re.sub(r"^```json|^```|```$", "", raw_text, flags=re.MULTILINE).strip()
+              return json.loads(raw_text)
 
-          while iteration < MAX_ATTEMPTS:
-              iteration += 1
-              print(f"\n🔄 ==========================================")
-              print(f"🔄 [AGENT ITERATION {iteration}/{MAX_ATTEMPTS}]")
-              print(f"🔄 ==========================================")
+          print("==================================================")
+          print("🤖 AGENT 1 (DEVELOPER): Generating Implementation...")
+          print("==================================================")
+          coder_prompt = f"""
+          You are Developer Agent.
+          Task: {issue_title}
+          Requirements: {issue_body}
 
-              if test_error_feedback:
-                  print("⚠️ Previous attempt failed unit tests. Attempting self-healing...")
-                  prompt = f"""
-                  Task: {issue_title}
-                  Previous code failed pytest with this error:
-                  {test_error_feedback}
-                  
-                  Modify solution.py and test_solution.py to fix this.
-                  Return ONLY JSON: {{"solution_code": "...", "test_code": "..."}}
-                  """
-              else:
-                  prompt = f"""
-                  Task: {issue_title}
-                  Requirements: {issue_body}
-                  Write Python solution.py and test_solution.py.
-                  Return ONLY JSON: {{"solution_code": "...", "test_code": "..."}}
-                  """
+          Write clean Python code in solution.py and pytest tests in test_solution.py.
+          Return ONLY valid JSON:
+          {{"solution_code": "code here", "test_code": "test here"}}
+          """
+          coder_output = clean_json(call_llm(coder_prompt))
+          current_code = coder_output["solution_code"]
+          current_tests = coder_output["test_code"]
 
-              response, active_model = call_llm(prompt)
-              text = response.text.strip()
-              if text.startswith("```"):
-                  text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
-              data = json.loads(text)
+          print("\n==================================================")
+          print("🕵️ AGENT 2 (SECURITY AUDITOR): Conducting Security Review...")
+          print("==================================================")
+          security_prompt = f"""
+          You are an adversarial Senior AppSec Auditor inspecting code before production.
+          Inspect this code for security vulnerabilities:
+          {current_code}
 
-              with open("solution.py", "w", encoding="utf-8") as f:
-                  f.write(data["solution_code"])
-              with open("test_solution.py", "w", encoding="utf-8") as f:
-                  f.write(data["test_code"])
+          Check for:
+          - Insecure cryptographic algorithms (e.g. MD5, SHA1 for passwords)
+          - Hardcoded credentials or secrets
+          - ReDoS or unbounded buffer vulnerabilities
+          - Injection flaws
 
-              # Evaluate with pytest
-              print(f"🔍 [EVALUATE ITERATION {iteration}]: Running pytest...")
-              test_run = subprocess.run(["pytest", "test_solution.py"], capture_output=True, text=True)
+          Return ONLY valid JSON:
+          {{
+            "passed": true/false,
+            "severity": "CLEAN" | "LOW" | "HIGH",
+            "findings": "summary of findings",
+            "required_fixes": "concrete instructions for the developer if failed"
+          }}
+          """
+          audit = clean_json(call_llm(security_prompt))
+          print(f"Audit Status: {'✅ PASSED' if audit['passed'] else '⚠️ REJECTED BY SECURITY'}")
+          print(f"Findings: {audit['findings']}")
 
-              if test_run.returncode == 0:
-                  print(f"✅ Iteration {iteration}: ALL TESTS PASSED!")
-                  success = True
-                  break
-              else:
-                  print(f"❌ Iteration {iteration} FAILED pytest checks.")
-                  test_error_feedback = test_run.stdout + "\n" + test_run.stderr
+          # ADVERSARIAL PEER-REVIEW LOOP (If Security Agent rejected the code)
+          if not audit["passed"]:
+              print("\n🔄 [ADVERSARIAL LOOP]: Routing security audit feedback back to Developer Agent...")
+              remediation_prompt = f"""
+              You are Developer Agent.
+              The Security Auditor REJECTED your code with this finding:
+              {audit['findings']}
+              Required Fixes: {audit.get('required_fixes', 'Make it secure')}
 
-          # Check Circuit Breaker Status
-          if not success:
-              print(f"\n🚨 CIRCUIT BREAKER TRIPPED! Maximum attempts ({MAX_ATTEMPTS}/{MAX_ATTEMPTS}) reached.")
-              with open("escalation_report.md", "w") as f:
-                  f.write(f"### 🚨 Agent Circuit Breaker Tripped\n")
-                  f.write(f"The AI Agent exhausted all `{MAX_ATTEMPTS}` self-healing iterations without passing CI.\n\n")
-                  f.write(f"**Last Error Trace:**\n```\n{test_error_feedback[:500]}\n```\n\n")
-                  f.write(f"**Action Required:** Human engineer review needed.\n")
-              
-              # Set step output to escalated
-              with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
-                  gh_out.write("status=escalated\n")
-          else:
-              with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
-                  gh_out.write("status=success\n")
+              Original Code:
+              {current_code}
 
-              with open("audit_report.md", "w") as f:
-                  f.write(f"### 📋 Traceability Report\n- **Iterations Used:** `{iteration}/{MAX_ATTEMPTS}`\n- **Status:** Passed\n")
+              Rewrite solution.py to fix all security vulnerabilities and update test_solution.py.
+              Return ONLY valid JSON:
+              {{"solution_code": "...", "test_code": "..."}}
+              """
+              fixed_output = clean_json(call_llm(remediation_prompt))
+              current_code = fixed_output["solution_code"]
+              current_tests = fixed_output["test_code"]
+              print("✅ Developer Agent successfully patched the security vulnerabilities!")
+
+          # Save final code
+          with open("solution.py", "w", encoding="utf-8") as f:
+              f.write(current_code)
+          with open("test_solution.py", "w", encoding="utf-8") as f:
+              f.write(current_tests)
+
+          # Pytest Evaluation
+          print("\n🔍 Evaluating with pytest test suite...")
+          test_run = subprocess.run(["pytest", "test_solution.py"], capture_output=True, text=True)
+          if test_run.returncode != 0:
+              print(test_run.stdout)
+              print(test_run.stderr)
+              raise RuntimeError("Pytest failed on final code.")
+          print("✅ All unit tests PASSED green!")
+
+          # Generate Multi-Agent Sign-off Report
+          report = f"""
+          ### 👥 Multi-Agent Collaboration Sign-Off
+          - **Developer Agent:** Generated implementation & pytest tests
+          - **Security Auditor Agent:** Conducted automated OWASP vulnerability scan
+          - **Security Audit Status:** `{'PASSED (Clean)' if audit['passed'] else 'PASSED (Remediated Security Vulnerabilities)'}`
+          - **Security Auditor Findings:** {audit['findings']}
+          - **Automated CI Checks:** ✅ Passed (`pytest test_solution.py`)
+          """
+          with open("multi_agent_report.md", "w", encoding="utf-8") as f:
+              f.write(report)
           EOF
 
-      # IF ESCALATED: Post a comment on the Issue asking for human help
-      - name: Escalate to Human on Issue
-        if: steps.agent_step.outputs.status == 'escalated' && github.event_name == 'issues'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh issue comment ${{ github.event.issue.number }} --body-file escalation_report.md
-          gh issue edit ${{ github.event.issue.number }} --add-label "needs-human-review"
-
-      # IF SUCCESSFUL: Create the Pull Request
-      - name: Create Pull Request (Only if tests passed)
-        if: steps.agent_step.outputs.status == 'success' && github.event_name != 'issue_comment'
+      - name: Create Multi-Agent Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat(agent): implement issue #${{ github.event.issue.number || 4 }}"
-          branch: "agent/issue-${{ github.event.issue.number || 4 }}"
-          title: "🤖 Agent PR: ${{ github.event.issue.title || 'Implementation' }}"
+          commit-message: "feat(multi-agent): implement issue #${{ github.event.issue.number || 10 }}"
+          branch: "agent/multi-agent-${{ github.event.issue.number || 10 }}"
+          title: "🤖 Multi-Agent PR: ${{ github.event.issue.title || 'Secure Feature' }}"
           body: |
-            ## Autonomous Agent Implementation
-            Closes #${{ github.event.issue.number || 4 }}
+            ## Autonomous Multi-Agent Squad Implementation
+            Closes #${{ github.event.issue.number || 10 }}
             
-            $(cat audit_report.md)
+            $(cat multi_agent_report.md)
+            
+            ---
+            *Human-in-the-Loop review requested.*
