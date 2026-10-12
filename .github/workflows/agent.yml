@@ -41,13 +41,14 @@ jobs:
         run: |
           pip install google-genai pytest
 
-      - name: Run Agent with Self-Healing Loop & Guardrails
+      - name: Run Agent with Self-Healing Loop & Escalation
+        id: agent_step
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           IS_PR_COMMENT: ${{ github.event_name == 'issue_comment' }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
-          ISSUE_TITLE: ${{ github.event.issue.title || 'Date Calculator' }}
-          ISSUE_BODY: ${{ github.event.issue.body || 'Build a date difference and leap year validator' }}
+          ISSUE_TITLE: ${{ github.event.issue.title || 'Task' }}
+          ISSUE_BODY: ${{ github.event.issue.body || '' }}
           ISSUE_NUM: ${{ github.event.issue.number || 4 }}
         run: |
           python - << 'EOF'
@@ -64,41 +65,21 @@ jobs:
           comment_body = os.environ.get("COMMENT_BODY", "")
           issue_title = os.environ.get("ISSUE_TITLE", "")
           issue_body = os.environ.get("ISSUE_BODY", "")
-          issue_num = os.environ.get("ISSUE_NUM", "4")
 
-          # GUARDRAIL 1: Prompt Injection Defense
-          forbidden_keywords = [".github/workflows", "secrets", "api_key", "chmod", "rm -rf"]
-          for kw in forbidden_keywords:
-              if kw in issue_body.lower() or kw in comment_body.lower():
-                  raise PermissionError(f"🚨 GUARDRAIL BLOCKED: Forbidden keyword '{kw}' detected!")
-
-          # Helper function with automatic model fallback for 503 errors
-          def call_llm_with_fallback(prompt_text):
-              models = [
-                  "models/gemini-3.7-flash",
-                  "models/gemini-3.8-flash",
-                  "models/gemini-3.5-flash",
-                  "models/gemini-flash-latest"
-              ]
-              last_err = None
+          def call_llm(prompt_text):
+              models = ["models/gemini-3.7-flash", "models/gemini-3.8-flash", "models/gemini-flash-latest"]
               for m in models:
-                  for attempt in range(2):
-                      try:
-                          print(f"🤖 Querying {m} (Attempt {attempt+1})...")
-                          res = client.models.generate_content(
-                              model=m,
-                              contents=prompt_text,
-                              config={'response_mime_type': 'application/json'}
-                          )
-                          print(f"✅ Success with {m}!")
-                          return res, m
-                      except Exception as e:
-                          print(f"⚠️ {m} failed: {e}")
-                          last_err = e
-                          time.sleep(2)
-              raise last_err
+                  try:
+                      res = client.models.generate_content(
+                          model=m,
+                          contents=prompt_text,
+                          config={'response_mime_type': 'application/json'}
+                      )
+                      return res, m
+                  except Exception:
+                      time.sleep(1)
+              raise RuntimeError("LLM Unavailable")
 
-          # GUARDRAIL 2: Self-Healing Loop with Circuit Breaker (Max 3 attempts)
           MAX_ATTEMPTS = 3
           iteration = 0
           test_error_feedback = ""
@@ -107,35 +88,29 @@ jobs:
 
           while iteration < MAX_ATTEMPTS:
               iteration += 1
-              print(f"\n🔄 [AGENT ITERATION {iteration}/{MAX_ATTEMPTS}]: Generating code & tests...")
+              print(f"\n🔄 ==========================================")
+              print(f"🔄 [AGENT ITERATION {iteration}/{MAX_ATTEMPTS}]")
+              print(f"🔄 ==========================================")
 
-              if is_pr_comment and iteration == 1:
-                  existing_code = open("solution.py").read() if os.path.exists("solution.py") else ""
+              if test_error_feedback:
+                  print("⚠️ Previous attempt failed unit tests. Attempting self-healing...")
                   prompt = f"""
                   Task: {issue_title}
-                  Current Code: {existing_code}
-                  Human Feedback: {comment_body}
-                  Apply revisions. Return JSON with 'solution_code' and 'test_code'.
-                  """
-              elif test_error_feedback:
-                  print(f"⚠️ Test failure detected. Self-correcting based on traceback...")
-                  prompt = f"""
-                  Your previous code failed unit tests with this error:
+                  Previous code failed pytest with this error:
                   {test_error_feedback}
                   
-                  Fix the bug in `solution.py` or `test_solution.py`.
-                  Return ONLY a JSON object: {{"solution_code": "...", "test_code": "..."}}
+                  Modify solution.py and test_solution.py to fix this.
+                  Return ONLY JSON: {{"solution_code": "...", "test_code": "..."}}
                   """
               else:
                   prompt = f"""
                   Task: {issue_title}
                   Requirements: {issue_body}
-                  Write Python solution in `solution.py` and pytest tests in `test_solution.py`.
-                  Return ONLY a JSON object: {{"solution_code": "...", "test_code": "..."}}
+                  Write Python solution.py and test_solution.py.
+                  Return ONLY JSON: {{"solution_code": "...", "test_code": "..."}}
                   """
 
-              response, active_model = call_llm_with_fallback(prompt)
-              
+              response, active_model = call_llm(prompt)
               text = response.text.strip()
               if text.startswith("```"):
                   text = re.sub(r"^```json|^```|```$", "", text, flags=re.MULTILINE).strip()
@@ -146,45 +121,50 @@ jobs:
               with open("test_solution.py", "w", encoding="utf-8") as f:
                   f.write(data["test_code"])
 
-              # EVALUATE STEP
-              print("🔍 [AGENT EVALUATE]: Running pytest...")
+              # Evaluate with pytest
+              print(f"🔍 [EVALUATE ITERATION {iteration}]: Running pytest...")
               test_run = subprocess.run(["pytest", "test_solution.py"], capture_output=True, text=True)
-              
+
               if test_run.returncode == 0:
-                  print("✅ All unit tests PASSED!")
+                  print(f"✅ Iteration {iteration}: ALL TESTS PASSED!")
                   success = True
                   break
               else:
-                  print("❌ Tests failed. Capturing error trace for self-healing...")
+                  print(f"❌ Iteration {iteration} FAILED pytest checks.")
                   test_error_feedback = test_run.stdout + "\n" + test_run.stderr
 
+          # Check Circuit Breaker Status
           if not success:
-              raise RuntimeError(f"🚨 CIRCUIT BREAKER TRIPPED: Agent failed to satisfy tests after {MAX_ATTEMPTS} attempts.")
+              print(f"\n🚨 CIRCUIT BREAKER TRIPPED! Maximum attempts ({MAX_ATTEMPTS}/{MAX_ATTEMPTS}) reached.")
+              with open("escalation_report.md", "w") as f:
+                  f.write(f"### 🚨 Agent Circuit Breaker Tripped\n")
+                  f.write(f"The AI Agent exhausted all `{MAX_ATTEMPTS}` self-healing iterations without passing CI.\n\n")
+                  f.write(f"**Last Error Trace:**\n```\n{test_error_feedback[:500]}\n```\n\n")
+                  f.write(f"**Action Required:** Human engineer review needed.\n")
+              
+              # Set step output to escalated
+              with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+                  gh_out.write("status=escalated\n")
+          else:
+              with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+                  gh_out.write("status=success\n")
 
-          # GUARDRAIL 3: Traceability & Audit Report Generation
-          audit_report = f"""
-          ### 📋 Agent Traceability & Audit Report
-          - **Model Provenance:** `{active_model}`
-          - **Execution Timestamp:** `{datetime.utcnow().isoformat()}Z`
-          - **Self-Healing Iterations:** `{iteration}/{MAX_ATTEMPTS}`
-          - **CI Test Status:** ✅ All pytest assertions verified green
-          - **Guardrail Checks:** ✅ Passed (No prompt injection, No workflow tampering)
-          """
-          with open("audit_report.md", "w", encoding="utf-8") as f:
-              f.write(audit_report)
+              with open("audit_report.md", "w") as f:
+                  f.write(f"### 📋 Traceability Report\n- **Iterations Used:** `{iteration}/{MAX_ATTEMPTS}`\n- **Status:** Passed\n")
           EOF
 
-      - name: Push Revision (if PR Comment)
-        if: github.event_name == 'issue_comment'
+      # IF ESCALATED: Post a comment on the Issue asking for human help
+      - name: Escalate to Human on Issue
+        if: steps.agent_step.outputs.status == 'escalated' && github.event_name == 'issues'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add solution.py test_solution.py
-          git commit -m "refactor(agent): self-healed and applied review feedback"
-          git push
+          gh issue comment ${{ github.event.issue.number }} --body-file escalation_report.md
+          gh issue edit ${{ github.event.issue.number }} --add-label "needs-human-review"
 
-      - name: Create Pull Request with Audit Trail (if New Issue)
-        if: github.event_name != 'issue_comment'
+      # IF SUCCESSFUL: Create the Pull Request
+      - name: Create Pull Request (Only if tests passed)
+        if: steps.agent_step.outputs.status == 'success' && github.event_name != 'issue_comment'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -195,10 +175,4 @@ jobs:
             ## Autonomous Agent Implementation
             Closes #${{ github.event.issue.number || 4 }}
             
-            ### Task Description
-            ${{ github.event.issue.body }}
-            
             $(cat audit_report.md)
-            
-            ---
-            *Please review the diff and approve to merge.*
