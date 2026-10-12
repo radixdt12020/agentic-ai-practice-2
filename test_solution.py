@@ -1,136 +1,128 @@
-from datetime import date, datetime
 import pytest
-
-from solution import (
-    DateCalculator,
-    date_difference,
-    days_between,
-    days_in_month,
-    is_leap_year,
-    is_valid_date,
-)
+from solution import is_leap_year, days_between
 
 
-class TestLeapYear:
-    def test_typical_leap_years(self):
-        assert is_leap_year(2020) is True
-        assert is_leap_year(2024) is True
-        assert is_leap_year(2028) is True
+class TestIsLeapYear:
+    @pytest.mark.parametrize(
+        "year",
+        [1600, 2000, 2400, 400, 800, 1200],
+    )
+    def test_divisible_by_400_is_leap_year(self, year):
+        assert is_leap_year(year) is True
 
-    def test_typical_non_leap_years(self):
-        assert is_leap_year(2021) is False
-        assert is_leap_year(2022) is False
-        assert is_leap_year(2023) is False
+    @pytest.mark.parametrize(
+        "year",
+        [1700, 1800, 1900, 2100, 2200, 2300, 2500],
+    )
+    def test_divisible_by_100_not_400_is_not_leap_year(self, year):
+        assert is_leap_year(year) is False
 
-    def test_century_years(self):
-        assert is_leap_year(2000) is True
-        assert is_leap_year(1600) is True
-        assert is_leap_year(2400) is True
-        assert is_leap_year(1900) is False
-        assert is_leap_year(1800) is False
-        assert is_leap_year(2100) is False
+    @pytest.mark.parametrize(
+        "year",
+        [2004, 2008, 2012, 2016, 2020, 2024, 2028],
+    )
+    def test_divisible_by_4_not_100_is_leap_year(self, year):
+        assert is_leap_year(year) is True
 
-    def test_invalid_types_and_values(self):
-        with pytest.raises(ValueError):
-            is_leap_year(0)
-        with pytest.raises(ValueError):
-            is_leap_year(-2020)
+    @pytest.mark.parametrize(
+        "year",
+        [2001, 2002, 2003, 2019, 2021, 2022, 2023],
+    )
+    def test_not_divisible_by_4_is_not_leap_year(self, year):
+        assert is_leap_year(year) is False
+
+    @pytest.mark.parametrize(
+        "invalid_input",
+        ["2020", 2020.0, None, [2020], True, False],
+    )
+    def test_invalid_type_raises_type_error(self, invalid_input):
         with pytest.raises(TypeError):
-            is_leap_year(2020.5)  # type: ignore
-        with pytest.raises(TypeError):
-            is_leap_year("2020")  # type: ignore
-        with pytest.raises(TypeError):
-            is_leap_year(True)  # type: ignore
+            is_leap_year(invalid_input)
 
 
-class TestDaysInMonth:
-    def test_february_leap_and_non_leap(self):
-        assert days_in_month(2024, 2) == 29
-        assert days_in_month(2023, 2) == 28
-        assert days_in_month(2000, 2) == 29
-        assert days_in_month(1900, 2) == 28
-
-    def test_standard_months(self):
-        assert days_in_month(2023, 1) == 31
-        assert days_in_month(2023, 4) == 30
-        assert days_in_month(2023, 7) == 31
-        assert days_in_month(2023, 8) == 31
-
-    def test_invalid_month(self):
-        with pytest.raises(ValueError):
-            days_in_month(2023, 0)
-        with pytest.raises(ValueError):
-            days_in_month(2023, 13)
-        with pytest.raises(TypeError):
-            days_in_month(2023, "1")  # type: ignore
-
-
-class TestIsValidDate:
-    def test_valid_dates(self):
-        assert is_valid_date(2024, 2, 29) is True
-        assert is_valid_date(2023, 12, 31) is True
-        assert is_valid_date(2023, 4, 30) is True
-
-    def test_invalid_dates(self):
-        assert is_valid_date(2023, 2, 29) is False
-        assert is_valid_date(2023, 4, 31) is False
-        assert is_valid_date(2023, 13, 1) is False
-        assert is_valid_date(-2023, 1, 1) is False
-        assert is_valid_date(2023, 1, 32) is False
-        assert is_valid_date("2023", 1, 1) is False  # type: ignore
-
-
-class TestDaysBetween:
+class TestDaysBetweenValid:
     def test_same_date(self):
         assert days_between("2023-01-01", "2023-01-01") == 0
-        assert days_between(date(2023, 1, 1), date(2023, 1, 1)) == 0
 
-    def test_signed_and_absolute_difference(self):
-        assert days_between("2023-01-01", "2023-01-10") == 9
-        assert days_between("2023-01-10", "2023-01-01") == -9
-        assert days_between("2023-01-10", "2023-01-01", absolute=True) == 9
+    def test_consecutive_days(self):
+        assert days_between("2023-01-01", "2023-01-02") == 1
+        assert days_between("2023-01-02", "2023-01-01") == 1
 
-    def test_across_month_and_year_boundary(self):
-        assert days_between("2023-12-30", "2024-01-02") == 3
-        # Crossing leap day 2024-02-29
-        assert days_between("2024-02-28", "2024-03-01") == 2
-        # Non-leap year
+    def test_non_leap_year_february_to_march(self):
         assert days_between("2023-02-28", "2023-03-01") == 1
 
-    def test_datetime_object_support(self):
-        dt1 = datetime(2023, 5, 1, 10, 30)
-        dt2 = datetime(2023, 5, 5, 15, 45)
-        assert days_between(dt1, dt2) == 4
+    def test_leap_year_february_to_march(self):
+        assert days_between("2024-02-28", "2024-03-01") == 2
+        assert days_between("2024-02-28", "2024-02-29") == 1
+        assert days_between("2024-02-29", "2024-03-01") == 1
 
-    def test_invalid_date_inputs(self):
+    def test_full_year_non_leap(self):
+        assert days_between("2023-01-01", "2024-01-01") == 365
+
+    def test_full_year_leap(self):
+        assert days_between("2024-01-01", "2025-01-01") == 366
+
+    def test_century_boundary(self):
+        assert days_between("1999-12-31", "2000-01-01") == 1
+        assert days_between("2000-01-01", "2001-01-01") == 366
+
+    def test_multiple_years(self):
+        # 2020 is leap (366), 2021 is non-leap (365) => 731 days
+        assert days_between("2020-01-01", "2022-01-01") == 731
+
+
+class TestDaysBetweenInvalid:
+    @pytest.mark.parametrize(
+        "invalid_date",
+        [
+            "2023-02-29",  # Not a leap year
+            "2021-02-29",  # Not a leap year
+            "1900-02-29",  # 1900 is not a leap year
+            "2024-02-30",  # Leap year February only has 29 days
+            "2023-04-31",  # April only has 30 days
+            "2023-06-31",  # June only has 30 days
+            "2023-09-31",  # September only has 30 days
+            "2023-11-31",  # November only has 30 days
+            "2023-13-01",  # Invalid month
+            "2023-00-01",  # Invalid month
+            "2023-01-00",  # Invalid day
+            "2023-01-32",  # Invalid day
+        ],
+    )
+    def test_invalid_calendar_dates(self, invalid_date):
         with pytest.raises(ValueError):
-            days_between("invalid-date", "2023-01-01")
+            days_between(invalid_date, "2023-01-01")
         with pytest.raises(ValueError):
-            days_between("2023-02-30", "2023-03-01")
-        with pytest.raises(TypeError):
-            days_between(12345, "2023-01-01")  # type: ignore
+            days_between("2023-01-01", invalid_date)
 
+    @pytest.mark.parametrize(
+        "malformed_date",
+        [
+            "2023/01/01",       # Wrong separator
+            "01-01-2023",       # Wrong component order
+            "2023-1-01",        # Month not zero-padded
+            "2023-01-1",        # Day not zero-padded
+            "23-01-01",         # 2-digit year
+            "2023-01-01T00:00", # ISO with time
+            "2023-01-01 ",      # Trailing space
+            " 2023-01-01",      # Leading space
+            "not-a-date",       # Letters
+            "",                 # Empty string
+            "20230101",         # No separator
+        ],
+    )
+    def test_malformed_formats(self, malformed_date):
+        with pytest.raises(ValueError):
+            days_between(malformed_date, "2023-01-01")
+        with pytest.raises(ValueError):
+            days_between("2023-01-01", malformed_date)
 
-class TestDateDifferenceBreakdown:
-    def test_difference_breakdown(self):
-        diff = date_difference("2023-01-01", "2023-01-17")
-        assert diff["days"] == 16
-        assert diff["weeks"] == 2
-        assert diff["remaining_days"] == 2
-
-    def test_difference_reverse_order(self):
-        diff = date_difference("2023-01-17", "2023-01-01")
-        assert diff["days"] == 16
-        assert diff["weeks"] == 2
-        assert diff["remaining_days"] == 2
-
-
-class TestDateCalculatorClass:
-    def test_class_wrapper_methods(self):
-        calc = DateCalculator()
-        assert calc.is_leap_year(2024) is True
-        assert calc.is_valid_date(2024, 2, 29) is True
-        assert calc.days_in_month(2024, 2) == 29
-        assert calc.days_between("2024-01-01", "2024-01-05") == 4
-        diff = calc.difference("2024-01-01", "2024-01-10")
-        assert diff["days"] == 9
+    @pytest.mark.parametrize(
+        "non_str",
+        [None, 12345, True, ["2023-01-01"]],
+    )
+    def test_non_string_types(self, non_str):
+        with pytest.raises(ValueError):
+            days_between(non_str, "2023-01-01")
+        with pytest.raises(ValueError):
+            days_between("2023-01-01", non_str)
