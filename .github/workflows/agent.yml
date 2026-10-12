@@ -31,7 +31,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ISSUE_TITLE: ${{ github.event.issue.title || 'Multi-Agent Secure Auth Task' }}
           ISSUE_BODY: ${{ github.event.issue.body || 'Build a secure password hasher and token generator' }}
-          ISSUE_NUM: ${{ github.event.issue.number || 10 }}
+          ISSUE_NUM: ${{ github.event.issue.number || 24 }}
         run: |
           python - << 'EOF'
           import os
@@ -46,19 +46,30 @@ jobs:
           issue_body = os.environ.get("ISSUE_BODY", "")
 
           def call_llm(prompt_text):
-              models = ["models/gemini-3.7-flash", "models/gemini-3.8-flash", "models/gemini-flash-latest"]
+              models = [
+                  "models/gemini-3.7-flash",
+                  "models/gemini-3.8-flash",
+                  "models/gemini-3.5-flash",
+                  "models/gemini-flash-latest"
+              ]
+              last_err = None
               for m in models:
-                  for attempt in range(2):
+                  for attempt in range(3):
                       try:
+                          print(f"🤖 Querying {m} (Attempt {attempt+1})...")
                           res = client.models.generate_content(
                               model=m,
                               contents=prompt_text,
                               config={'response_mime_type': 'application/json'}
                           )
+                          print(f"✅ Success with {m}!")
                           return res.text
-                      except Exception:
-                          time.sleep(2)
-              raise RuntimeError("All models unavailable")
+                      except Exception as e:
+                          print(f"⚠️ {m} returned error: {e}")
+                          last_err = e
+                          print("⏳ Waiting 5 seconds before retrying...")
+                          time.sleep(5)
+              raise last_err
 
           def clean_json(raw_text):
               raw_text = raw_text.strip()
@@ -82,6 +93,9 @@ jobs:
           current_code = coder_output["solution_code"]
           current_tests = coder_output["test_code"]
 
+          # Short pause to prevent API rate limits between agents
+          time.sleep(3)
+
           print("\n==================================================")
           print("🕵️ AGENT 2 (SECURITY AUDITOR): Conducting Security Review...")
           print("==================================================")
@@ -90,11 +104,10 @@ jobs:
           Inspect this code for security vulnerabilities:
           {current_code}
 
-          Check for:
-          - Insecure cryptographic algorithms (e.g. MD5, SHA1 for passwords)
-          - Hardcoded credentials or secrets
-          - ReDoS or unbounded buffer vulnerabilities
-          - Injection flaws
+          Check strictly for:
+          - Usage of `pickle` or insecure deserialization (RCE risk)
+          - Cryptographically weak hashing (MD5, SHA1 for security/sessions)
+          - Hardcoded credentials or injection flaws
 
           Return ONLY valid JSON:
           {{
@@ -108,9 +121,10 @@ jobs:
           print(f"Audit Status: {'✅ PASSED' if audit['passed'] else '⚠️ REJECTED BY SECURITY'}")
           print(f"Findings: {audit['findings']}")
 
-          # ADVERSARIAL PEER-REVIEW LOOP (If Security Agent rejected the code)
+          # ADVERSARIAL PEER-REVIEW LOOP
           if not audit["passed"]:
               print("\n🔄 [ADVERSARIAL LOOP]: Routing security audit feedback back to Developer Agent...")
+              time.sleep(3)
               remediation_prompt = f"""
               You are Developer Agent.
               The Security Auditor REJECTED your code with this finding:
@@ -120,7 +134,7 @@ jobs:
               Original Code:
               {current_code}
 
-              Rewrite solution.py to fix all security vulnerabilities and update test_solution.py.
+              Rewrite solution.py to fix all security vulnerabilities (replace pickle with json/safe serialization, replace md5 with sha256) and update test_solution.py.
               Return ONLY valid JSON:
               {{"solution_code": "...", "test_code": "..."}}
               """
@@ -161,12 +175,12 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "feat(multi-agent): implement issue #${{ github.event.issue.number || 10 }}"
-          branch: "agent/multi-agent-${{ github.event.issue.number || 10 }}"
+          commit-message: "feat(multi-agent): implement issue #${{ github.event.issue.number || 24 }}"
+          branch: "agent/multi-agent-${{ github.event.issue.number || 24 }}"
           title: "🤖 Multi-Agent PR: ${{ github.event.issue.title || 'Secure Feature' }}"
           body: |
             ## Autonomous Multi-Agent Squad Implementation
-            Closes #${{ github.event.issue.number || 10 }}
+            Closes #${{ github.event.issue.number || 24 }}
             
             $(cat multi_agent_report.md)
             
